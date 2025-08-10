@@ -6,6 +6,7 @@ import React, { useRef, useEffect, useState } from "react";
  * - Plays a local audio file chosen by the user.
  * - Circular bars + circular waveform.
  * - Embedded smoky particle cloud that slowly rotates and subtly pulses with the bass.
+ * - Full screen design with custom controls and progress bar.
  *
  * Notes:
  * - Works with local files (input type="file").
@@ -23,6 +24,9 @@ export default function MusicVisualizer() {
 
   const [audioFile, setAudioFile] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [fileName, setFileName] = useState("");
 
   // particles kept in a ref so animation loop doesn't re-create them each frame
   const particlesRef = useRef([]);
@@ -32,8 +36,8 @@ export default function MusicVisualizer() {
   const resizeCanvas = (canvas) => {
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    const width = Math.max(200, rect.width);
-    const height = Math.max(200, rect.height);
+    const width = rect.width;
+    const height = rect.height;
     if (
       canvas.width !== Math.round(width * dpr) ||
       canvas.height !== Math.round(height * dpr)
@@ -73,7 +77,7 @@ export default function MusicVisualizer() {
       }
       if (analyserRef.current) {
         try {
-          analyserRef.current.disconnect();
+        analyserRef.current.disconnect();
         } catch {}
         analyserRef.current = null;
       }
@@ -100,6 +104,35 @@ export default function MusicVisualizer() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Update progress bar
+  useEffect(() => {
+    if (!audioRef.current) return;
+
+    const audio = audioRef.current;
+    
+    const updateProgress = () => {
+      setCurrentTime(audio.currentTime);
+      setDuration(audio.duration || 0);
+    };
+
+    const handleTimeUpdate = () => updateProgress();
+    const handleLoadedMetadata = () => updateProgress();
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+    };
+
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('ended', handleEnded);
+
+    return () => {
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('ended', handleEnded);
+    };
+  }, [audioFile]);
 
   useEffect(() => {
     if (!audioFile) return;
@@ -330,16 +363,25 @@ export default function MusicVisualizer() {
 
   // ensure audioContext resumes on user play action (autoplay policies)
   const handlePlay = async () => {
+    if (!audioRef.current) return;
+    
     setIsPlaying(true);
     try {
       if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
         await audioCtxRef.current.resume();
       }
-    } catch (e) {}
+      audioRef.current.play();
+    } catch (e) {
+      console.error('Error playing audio:', e);
+      setIsPlaying(false);
+    }
   };
 
   const handlePause = () => {
+    if (!audioRef.current) return;
+    
     setIsPlaying(false);
+    audioRef.current.pause();
   };
 
   const handleFileChange = (e) => {
@@ -352,61 +394,310 @@ export default function MusicVisualizer() {
     }
     const url = URL.createObjectURL(f);
     setAudioFile(url);
+    setFileName(f.name.replace(/\.[^/.]+$/, "")); // Remove file extension
     // set audio element src immediately
     if (audioRef.current) {
       audioRef.current.src = url;
       audioRef.current.load();
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setDuration(0);
     }
+  };
+
+  const handleProgressClick = (e) => {
+    if (!audioRef.current || !duration) return;
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const percentage = clickX / rect.width;
+    const newTime = percentage * duration;
+    
+    audioRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  const formatTime = (time) => {
+    if (!time || isNaN(time)) return '00:00';
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
   return (
     <div
       style={{
-        textAlign: "center",
-        padding: 16,
-        background: "#000",
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: '100vh',
+        background: "linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%)",
         color: "#ddd",
-        minHeight: 480,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
       }}
     >
-      <h3 style={{ margin: "8px 0 12px 0" }}>
-        Circular Music Visualizer — smoky, bass-reactive
-      </h3>
+      {/* Hidden audio element */}
+      <audio
+        ref={audioRef}
+        src={audioFile}
+        preload="metadata"
+        style={{ display: 'none' }}
+      />
 
-      <div style={{ marginBottom: 12 }}>
-        <input type="file" accept="audio/*" onChange={handleFileChange} />
-      </div>
-
-      <div style={{ maxWidth: 760, margin: "0 auto" }}>
-        {audioFile ? (
-          <audio
-            ref={audioRef}
-            src={audioFile}
-            controls
-            onPlay={handlePlay}
-            onPause={handlePause}
-            style={{ width: "100%", marginBottom: 12 }}
-          />
-        ) : (
-          <div style={{ color: "#888", marginBottom: 12 }}>
-            Choose an audio file to visualize (mp3/wav/etc.)
-          </div>
-        )}
-        <div
-          style={{ width: "100%", display: "flex", justifyContent: "center" }}
-        >
-          <canvas
-            ref={canvasRef}
+      {/* Top Left - File Selector */}
+      <div style={{ 
+        position: 'absolute',
+        top: '30px',
+        left: '30px',
+        zIndex: 10,
+      }}>
+        <div style={{
+          background: 'rgba(255,255,255,0.05)',
+          backdropFilter: 'blur(10px)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: '15px',
+          padding: '20px',
+          minWidth: '200px'
+        }}>
+          <h3 style={{ 
+            margin: '0 0 15px 0', 
+            fontSize: '18px',
+            fontWeight: '400',
+            color: '#fff',
+            textAlign: 'center'
+          }}>
+            SELECT AUDIO
+          </h3>
+          <input 
+            type="file" 
+            accept="audio/*" 
+            onChange={handleFileChange}
             style={{
-              width: 500,
-              height: 500,
-              borderRadius: "50%",
-              boxShadow: "0 10px 40px rgba(0,0,0,0.6)",
-              background: "#000",
+              width: '100%',
+              padding: '10px',
+              background: 'rgba(255,255,255,0.1)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              borderRadius: '8px',
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: '14px'
             }}
           />
         </div>
       </div>
+
+      {/* Center Canvas Container */}
+      <div style={{ 
+        flex: 1, 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center',
+        position: 'relative'
+      }}>
+        <canvas
+          ref={canvasRef}
+          style={{
+            width: '80vh',
+            height: '80vh',
+            maxWidth: '80vw',
+            maxHeight: '80vh',
+            borderRadius: '50%',
+            boxShadow: '0 20px 80px rgba(0,0,0,0.8)',
+            background: "#000",
+          }}
+        />
+      </div>
+
+      {/* Bottom Center - Player Controls */}
+      <div style={{ 
+        position: 'absolute',
+        bottom: '50px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 10,
+        textAlign: 'center',
+        minWidth: '400px'
+      }}>
+        {/* Track Title */}
+        {fileName && (
+          <div style={{
+            marginBottom: '25px',
+            fontSize: '24px',
+            fontWeight: '300',
+            color: '#fff',
+            textShadow: '0 2px 10px rgba(0,0,0,0.8)'
+          }}>
+            {fileName}
+          </div>
+        )}
+
+        {/* Playback Controls */}
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '30px',
+          marginBottom: '25px'
+        }}>
+          {/* Skip Backward */}
+          <button
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#fff',
+              fontSize: '24px',
+              cursor: 'pointer',
+              padding: '10px',
+              borderRadius: '50%',
+              transition: 'all 0.3s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = 'rgba(255,255,255,0.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'none';
+            }}
+          >
+            ⏮️
+          </button>
+
+          {/* Play/Pause Button */}
+          <button
+            onClick={isPlaying ? handlePause : handlePlay}
+            style={{
+              width: '70px',
+              height: '70px',
+              borderRadius: '50%',
+              border: 'none',
+              background: isPlaying 
+                ? 'linear-gradient(135deg, #ff6b6b, #ee5a24)' 
+                : 'linear-gradient(135deg, #4ecdc4, #44a08d)',
+              color: 'white',
+              fontSize: '28px',
+              cursor: 'pointer',
+              boxShadow: '0 8px 25px rgba(0,0,0,0.3)',
+              transition: 'all 0.3s ease',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.transform = 'scale(1.1)';
+              e.target.style.boxShadow = '0 12px 35px rgba(0,0,0,0.4)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.transform = 'scale(1)';
+              e.target.style.boxShadow = '0 8px 25px rgba(0,0,0,0.3)';
+            }}
+          >
+            {isPlaying ? '⏸️' : '▶️'}
+          </button>
+
+          {/* Skip Forward */}
+          <button
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#fff',
+              fontSize: '24px',
+              cursor: 'pointer',
+              padding: '10px',
+              borderRadius: '50%',
+              transition: 'all 0.3s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = 'rgba(255,255,255,0.1)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'none';
+            }}
+          >
+            ⏭️
+          </button>
+        </div>
+
+        {/* Progress Bar */}
+        {audioFile && (
+          <div style={{ 
+            width: '100%',
+            marginBottom: '20px'
+          }}>
+            <div
+              onClick={handleProgressClick}
+              style={{
+                width: '100%',
+                height: '6px',
+                background: 'rgba(255,255,255,0.2)',
+                borderRadius: '3px',
+                cursor: 'pointer',
+                position: 'relative',
+                overflow: 'hidden',
+                marginBottom: '10px'
+              }}
+            >
+              <div
+                style={{
+                  width: `${duration ? (currentTime / duration) * 100 : 0}%`,
+                  height: '100%',
+                  background: 'linear-gradient(90deg, #4ecdc4, #44a08d)',
+                  borderRadius: '3px',
+                  transition: 'width 0.1s ease',
+                  position: 'relative'
+                }}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: `${duration ? (currentTime / duration) * 100 : 0}%`,
+                  transform: 'translate(-50%, -50%)',
+                  width: '14px',
+                  height: '14px',
+                  background: '#fff',
+                  borderRadius: '50%',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                  cursor: 'pointer'
+                }}
+              />
+            </div>
+            
+            {/* Time Display */}
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between',
+              fontSize: '14px',
+              color: 'rgba(255,255,255,0.8)'
+            }}>
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* File Selection Prompt */}
+      {!audioFile && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          textAlign: 'center',
+          color: 'rgba(255,255,255,0.6)',
+          fontSize: '18px',
+          zIndex: 5,
+          background: 'rgba(0,0,0,0.5)',
+          padding: '30px',
+          borderRadius: '15px',
+          backdropFilter: 'blur(10px)'
+        }}>
+          Choose an audio file to visualize
+        </div>
+      )}
     </div>
   );
 }
